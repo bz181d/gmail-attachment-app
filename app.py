@@ -14,7 +14,11 @@ app.secret_key = os.environ.get('SECRET_KEY', 'your-dev-secret')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 db.init_app(app)
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'openid'
+]
 CLIENT_SECRETS_FILE = 'client_secret.json'
 
 @app.route('/')
@@ -37,6 +41,8 @@ def authorize():
     session['state'] = state
     return redirect(auth_url)
 
+
+"""
 @app.route('/oauth2callback')
 def oauth2callback():
     state = session.get('state')
@@ -77,8 +83,45 @@ def oauth2callback():
     save_user_tokens(email, credentials)
     session['email'] = email
     return redirect(url_for('dashboard'))
+"""
 
+@app.route('/oauth2callback')
+def oauth2callback():
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        CLIENT_SECRETS_FILE,
+        scopes=SCOPES
+    )
+    flow.redirect_uri = url_for('oauth2callback', _external=True)
 
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"❌ Token fetch failed: {str(e)}", 400
+
+    credentials = flow.credentials
+
+    if not credentials or not credentials.valid:
+        return "❌ Invalid or missing credentials.", 401
+
+    try:
+        userinfo_service = googleapiclient.discovery.build(
+            'oauth2', 'v2', credentials=credentials
+        )
+        userinfo = userinfo_service.userinfo().get().execute()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"❌ Failed to fetch user info: {str(e)}", 401
+
+    email = userinfo.get('email')
+    if not email:
+        return "❌ Email not found in user info.", 400
+
+    save_user_tokens(email, credentials)
+    session['email'] = email
+    return redirect(url_for('dashboard'))
 
 
 
