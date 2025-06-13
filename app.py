@@ -1,4 +1,4 @@
-from flask import Flask, redirect, request, session, url_for, render_template
+from flask import Flask, redirect, request, session, url_for, render_template,render_template_string
 import os
 import datetime
 import google.oauth2.credentials
@@ -8,6 +8,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from storage import upload_file_to_supabase, list_user_files
 from gmail import check_and_download_attachments
 from models import db, init_db, save_user_tokens, get_all_user_tokens
+from base64 import urlsafe_b64decode
+from datetime import datetime, timezone
+import io
+import mimetypes
+import pytz
+
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-dev-secret')
@@ -129,7 +135,7 @@ def oauth2callback():
     return redirect(url_for('dashboard'))
 
 
-
+"""
 @app.route('/dashboard')
 def dashboard():
     if 'email' not in session:
@@ -137,6 +143,67 @@ def dashboard():
     email = session['email']
     files = list_user_files(email)
     return render_template('dashboard.html', files=files, email=email)
+"""
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    service = get_gmail_service()
+    user_email = session.get('email')
+    credentials = session.get('credentials')
+
+    query = 'has:attachment after:2025/06/13'
+    results = service.users().messages().list(userId='me', q=query).execute()
+    messages = results.get('messages', [])
+
+    previews = []
+
+    for msg in messages:
+        msg_data = service.users().messages().get(userId='me', id=msg['id']).execute()
+        internal_date = int(msg_data.get('internalDate')) / 1000
+        email_datetime = datetime.fromtimestamp(internal_date, tz=timezone.utc)
+
+        if email_datetime >= datetime(2025, 6, 13, tzinfo=timezone.utc):
+            parts = msg_data.get('payload', {}).get('parts', [])
+            for part in parts:
+                filename = part.get('filename', '')
+                if filename.endswith('.csv') or filename.endswith('.xlsx'):
+                    att_id = part['body'].get('attachmentId')
+                    attachment = service.users().messages().attachments().get(userId='me', messageId=msg['id'], id=att_id).execute()
+                    data = urlsafe_b64decode(attachment['data'].encode('UTF-8'))
+
+                    try:
+                        if filename.endswith('.csv'):
+                            df = pd.read_csv(BytesIO(data))
+                        else:
+                            df = pd.read_excel(BytesIO(data))
+                        
+                        # Convert DataFrame to HTML
+                        html_table = df.to_html(classes='table table-bordered', index=False)
+                        previews.append({
+                            'filename': filename,
+                            'table': html_table
+                        })
+                    except Exception as e:
+                        previews.append({
+                            'filename': filename,
+                            'table': f"<p>Could not parse file: {e}</p>"
+                        })
+
+    return render_template_string("""
+        <h2>Hello {{ email }}</h2>
+        <h3>Attachment Previews (since 13 June 2025):</h3>
+        {% if previews %}
+            {% for preview in previews %}
+                <h4>{{ preview.filename }}</h4>
+                <div>{{ preview.table|safe }}</div>
+                <hr>
+            {% endfor %}
+        {% else %}
+            <p>No CSV or Excel attachments found since 13 June 2025.</p>
+        {% endif %}
+    """, email=user_email, previews=previews)
+
 
 def job():
     print("[Job] Checking inboxes...")
