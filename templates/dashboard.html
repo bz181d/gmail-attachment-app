@@ -1,1 +1,17 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Your Synced Files</title>
+</head>
+<body>
+    <h2>Hello {{ email }}</h2>
+    <h3>Your Files:</h3>
+    <ul>
+    {% for file in files %}
+        <li><a href="{{ file.url }}" target="_blank">{{ file.name }}</a></li>
+    {% else %}
+        <li>No files found.</li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
