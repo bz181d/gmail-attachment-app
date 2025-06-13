@@ -14,6 +14,11 @@ app.secret_key = os.environ.get('SECRET_KEY', 'your-dev-secret')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 db.init_app(app)
 
+
+with app.app_context():
+    db.create_all()
+
+
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/userinfo.email',
