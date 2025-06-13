@@ -39,10 +39,9 @@ def authorize():
 
 @app.route('/oauth2callback')
 def oauth2callback():
-    try:
-        state = session['state']
-    except KeyError:
-        return "Session expired or tampered. Please <a href='/'>try again</a>.", 400
+    state = session.get('state')
+    if not state:
+        return "Session state missing. Try logging in again.", 400
 
     flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
@@ -51,19 +50,37 @@ def oauth2callback():
     )
     flow.redirect_uri = url_for('oauth2callback', _external=True)
 
-    flow.fetch_token(authorization_response=request.url)
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception as e:
+        return f"Token fetch failed: {str(e)}", 400
 
     credentials = flow.credentials
 
     if not credentials or not credentials.valid:
-        return "Invalid credentials received from Google.", 401
+        return "Invalid or missing credentials.", 401
 
-    userinfo = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials).userinfo().get().execute()
+    # Ensure all required fields are present
+    if not (credentials.token and credentials.refresh_token and credentials.client_id and credentials.client_secret):
+        return "Incomplete credentials. Try again with consent screen.", 401
+
+    try:
+        userinfo_service = googleapiclient.discovery.build(
+            'oauth2', 'v2', credentials=credentials
+        )
+        userinfo = userinfo_service.userinfo().get().execute()
+    except Exception as e:
+        return f"Failed to fetch user info: {str(e)}", 401
+
     email = userinfo['email']
 
     save_user_tokens(email, credentials)
     session['email'] = email
     return redirect(url_for('dashboard'))
+
+
+
+
 
 @app.route('/dashboard')
 def dashboard():
