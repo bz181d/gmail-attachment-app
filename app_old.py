@@ -1,4 +1,4 @@
-from flask import Flask, redirect, request, session, url_for, render_template, render_template_string
+from flask import Flask, redirect, request, session, url_for, render_template,render_template_string
 import os
 import datetime
 import google.oauth2.credentials
@@ -14,26 +14,16 @@ import io
 import mimetypes
 import pytz
 import pandas as pd
-from functools import wraps
 
-# --- Flask App Initialization ---
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-dev-secret')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 db.init_app(app)
 
-with app.app_context():
-    db.create_all()
 
-# --- Auth Config ---
-SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/userinfo.email',
-    'openid'
-]
-CLIENT_SECRETS_FILE = 'client_secret.json'
+from functools import wraps
 
-# --- Login Decorator ---
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -42,16 +32,17 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- Gmail Service Factory ---
-def get_gmail_service():
-    credentials_data = session.get('credentials')
-    if not credentials_data:
-        raise Exception("❌ No credentials found in session.")
+with app.app_context():
+    db.create_all()
 
-    creds = google.oauth2.credentials.Credentials(**credentials_data)
-    return googleapiclient.discovery.build('gmail', 'v1', credentials=creds)
 
-# --- Routes ---
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'openid'
+]
+CLIENT_SECRETS_FILE = 'client_secret.json'
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -66,11 +57,55 @@ def authorize():
     auth_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
-        prompt='consent'
+         prompt='consent'    
     )
-    session.permanent = True
+    session.permanent = True  # <-- Add this
     session['state'] = state
     return redirect(auth_url)
+
+
+"""
+@app.route('/oauth2callback')
+def oauth2callback():
+    state = session.get('state')
+    if not state:
+        return "Session state missing. Try logging in again.", 400
+
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        state=state
+    )
+    flow.redirect_uri = url_for('oauth2callback', _external=True)
+
+    try:
+        flow.fetch_token(authorization_response=request.url)
+    except Exception as e:
+        return f"Token fetch failed: {str(e)}", 400
+
+    credentials = flow.credentials
+
+    if not credentials or not credentials.valid:
+        return "Invalid or missing credentials.", 401
+
+    # Ensure all required fields are present
+    if not (credentials.token and credentials.refresh_token and credentials.client_id and credentials.client_secret):
+        return "Incomplete credentials. Try again with consent screen.", 401
+
+    try:
+        userinfo_service = googleapiclient.discovery.build(
+            'oauth2', 'v2', credentials=credentials
+        )
+        userinfo = userinfo_service.userinfo().get().execute()
+    except Exception as e:
+        return f"Failed to fetch user info: {str(e)}", 401
+
+    email = userinfo['email']
+
+    save_user_tokens(email, credentials)
+    session['email'] = email
+    return redirect(url_for('dashboard'))
+"""
 
 @app.route('/oauth2callback')
 def oauth2callback():
@@ -108,14 +143,25 @@ def oauth2callback():
 
     save_user_tokens(email, credentials)
     session['email'] = email
-    session['credentials'] = credentials_to_dict(credentials)
     return redirect(url_for('dashboard'))
+
+
+"""
+@app.route('/dashboard')
+def dashboard():
+    if 'email' not in session:
+        return redirect(url_for('index'))
+    email = session['email']
+    files = list_user_files(email)
+    return render_template('dashboard.html', files=files, email=email)
+"""
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
     service = get_gmail_service()
     user_email = session.get('email')
+    credentials = session.get('credentials')
 
     query = 'has:attachment after:2025/06/13'
     results = service.users().messages().list(userId='me', q=query).execute()
@@ -139,14 +185,21 @@ def dashboard():
 
                     try:
                         if filename.endswith('.csv'):
-                            df = pd.read_csv(io.BytesIO(data))
+                            df = pd.read_csv(BytesIO(data))
                         else:
-                            df = pd.read_excel(io.BytesIO(data))
-
+                            df = pd.read_excel(BytesIO(data))
+                        
+                        # Convert DataFrame to HTML
                         html_table = df.to_html(classes='table table-bordered', index=False)
-                        previews.append({'filename': filename, 'table': html_table})
+                        previews.append({
+                            'filename': filename,
+                            'table': html_table
+                        })
                     except Exception as e:
-                        previews.append({'filename': filename, 'table': f"<p>Could not parse file: {e}</p>"})
+                        previews.append({
+                            'filename': filename,
+                            'table': f"<p>Could not parse file: {e}</p>"
+                        })
 
     return render_template_string("""
         <h2>Hello {{ email }}</h2>
@@ -162,7 +215,7 @@ def dashboard():
         {% endif %}
     """, email=user_email, previews=previews)
 
-# --- Background Job ---
+
 def job():
     print("[Job] Checking inboxes...")
     users = get_all_user_tokens()
@@ -172,17 +225,6 @@ def job():
 scheduler = BackgroundScheduler()
 scheduler.add_job(job, 'interval', minutes=5)
 scheduler.start()
-
-# --- Utility ---
-def credentials_to_dict(credentials):
-    return {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
-    }
 
 if __name__ == '__main__':
     with app.app_context():
