@@ -32,21 +32,31 @@ def authorize():
         access_type='offline',
         include_granted_scopes='true'
     )
+    session.permanent = True  # <-- Add this
     session['state'] = state
     return redirect(auth_url)
 
 @app.route('/oauth2callback')
 def oauth2callback():
-    state = session['state']
+    try:
+        state = session['state']
+    except KeyError:
+        return "Session expired or tampered. Please <a href='/'>try again</a>.", 400
+
     flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
         scopes=SCOPES,
         state=state
     )
     flow.redirect_uri = url_for('oauth2callback', _external=True)
+
     flow.fetch_token(authorization_response=request.url)
 
     credentials = flow.credentials
+
+    if not credentials or not credentials.valid:
+        return "Invalid credentials received from Google.", 401
+
     userinfo = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials).userinfo().get().execute()
     email = userinfo['email']
 
