@@ -30,7 +30,8 @@ def authorize():
     flow.redirect_uri = url_for('oauth2callback', _external=True)
     auth_url, state = flow.authorization_url(
         access_type='offline',
-        include_granted_scopes='true'
+        include_granted_scopes='true',
+         prompt='consent'    
     )
     session.permanent = True  # <-- Add this
     session['state'] = state
